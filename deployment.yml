@@ -1,0 +1,62 @@
+- hosts: webapp
+  become: true
+  vars:
+    dir: /tmp/k8s_manifests
+    k8s: kubectl get
+    j2: "{{ lookup('env', 'BUILDNUM') }}"
+  tasks:
+    - name: check the directory to be created
+      stat:
+        path: "{{ dir }}"
+      register: directory_data
+    - name: display the result
+      debug: var=directory_data.stat.path
+    - name: delete the directory if its present
+      file: path={{ dir }} state=absent
+      when: directory_data.stat.exists == true
+    - name: creating a directory for k8s files
+      file:
+       path: "{{ dir }}"
+       state: directory
+       owner: root
+       mode: '0644'
+    - name: creating volume directory for preserving container data
+      stat:
+        path: /tmp/abcvolumes
+      register: k8s_volume
+    - name: create the volume
+      file: path=/tmp/abcvolumes state=directory
+      when: k8s_volume.stat.exists == false
+    - name: copying the manifest template to the working dir
+      template: src=templates/k8s_template.yml.j2 dest={{ dir }}
+    - name: rename the copied jinja2 template to k8s manifest extension file
+      command: "mv {{ dir }}/k8s_template.yml.j2  {{ dir }}/k8s_template.yml"
+    - name: Check for deployments
+      command: "{{ k8s }} deployment webapp"
+      register: dep_status
+      ignore_errors: true
+    - name: creating kubernetes deployment
+      command: "{{ item }}"
+      loop:
+       - kubectl delete all --all
+       - kubectl create -f {{ dir }}/k8s_template.yml
+      when: dep_status.failed == true
+      ignore_errors: true
+    - name: Rolling an update to container image
+      command: "kubectl set image deployment webapp c1=imblessingdavid/abctechnologies:{{ j2 }}"
+      register: image_updates
+      when: dep_status.failed == false
+    - name: printing the results if rolling update is prompted
+      debug: var=image_updates.stdout
+      when: dep_status.failed == false
+    - name: Check the status of pods and services
+      command: "{{ k8s }} {{ item }}"
+      loop:
+       - services
+       - pv
+       - pvc
+       - deployment -o wide
+       - pods -o wide
+      register: kube_commands
+    - name: check the status of kubectl commands
+      debug: var=kube_commands
